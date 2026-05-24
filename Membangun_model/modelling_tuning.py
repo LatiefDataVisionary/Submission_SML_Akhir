@@ -11,11 +11,9 @@ import mlflow
 import mlflow.sklearn
 import dagshub
 
-# Konfigurasi DagsHub
 DAGSHUB_REPO_OWNER = "datasciencelatief"
 DAGSHUB_REPO_NAME = "Submission_SML_Akhir"
 
-# Konfigurasi Path (Pastikan folder 'data' ada di dalam folder yang sama dengan script ini)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TRAIN_DATA_PATH = os.path.join(BASE_DIR, "data", "train_cleaned.csv")
 TEST_DATA_PATH = os.path.join(BASE_DIR, "data", "test_cleaned.csv")
@@ -130,7 +128,6 @@ def main():
     print("[INFO] Menginisialisasi koneksi DagsHub...")
     token = os.getenv("DAGSHUB_TOKEN")
     if token:
-        # Jika ada token (di CI/CD), gunakan token tersebut secara otomatis
         os.environ["DAGSHUB_USER_TOKEN"] = token
         print("[INFO] Token ditemukan, menggunakan Headless Authentication.")
     
