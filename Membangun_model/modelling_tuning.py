@@ -15,18 +15,20 @@ import dagshub
 DAGSHUB_REPO_OWNER = "datasciencelatief"
 DAGSHUB_REPO_NAME = "Submission_SML_Akhir"
 
-# Konfigurasi Path
+# Konfigurasi Path (Pastikan folder 'data' ada di dalam folder yang sama dengan script ini)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TRAIN_DATA_PATH = os.path.join(BASE_DIR, "..", "data", "train_cleaned.csv")
-TEST_DATA_PATH = os.path.join(BASE_DIR, "..", "data", "test_cleaned.csv")
+TRAIN_DATA_PATH = os.path.join(BASE_DIR, "data", "train_cleaned.csv")
+TEST_DATA_PATH = os.path.join(BASE_DIR, "data", "test_cleaned.csv")
 ARTIFACT_DIR = os.path.join(BASE_DIR, "artifacts")
 
 def load_dataset(train_path, test_path):
     """
     Memuat dataset latih dan uji dari direktori lokal.
-    Memisahkan fitur (X) dan target (y).
     """
-    print("[INFO] Memuat dataset...")
+    print(f"[INFO] Memuat dataset dari {train_path}...")
+    if not os.path.exists(train_path):
+        raise FileNotFoundError(f"File tidak ditemukan di: {train_path}")
+        
     train_df = pd.read_csv(train_path)
     test_df = pd.read_csv(test_path)
 
@@ -40,11 +42,9 @@ def load_dataset(train_path, test_path):
 
 def tune_hyperparameters(X_train, y_train):
     """
-    Melakukan pencarian hyperparameter terbaik menggunakan GridSearchCV
-    pada model Random Forest.
+    Melakukan hyperparameter tuning menggunakan GridSearchCV.
     """
     print("[INFO] Memulai hyperparameter tuning...")
-    
     rf_model = RandomForestClassifier(random_state=42, class_weight='balanced')
     
     param_grid = {
@@ -63,13 +63,12 @@ def tune_hyperparameters(X_train, y_train):
     )
     
     grid_search.fit(X_train, y_train)
-    
     print(f"[INFO] Tuning selesai. Parameter terbaik: {grid_search.best_params_}")
     return grid_search.best_estimator_, grid_search.best_params_
 
 def evaluate_model(model, X_test, y_test):
     """
-    Mengevaluasi performa model menggunakan metrik klasifikasi standar.
+    Mengevaluasi performa model.
     """
     print("[INFO] Mengevaluasi model pada data uji...")
     y_pred = model.predict(X_test)
@@ -80,17 +79,16 @@ def evaluate_model(model, X_test, y_test):
         "recall": recall_score(y_test, y_pred),
         "f1_score": f1_score(y_test, y_pred)
     }
-    
     return metrics, y_pred
 
 def generate_confusion_matrix(y_test, y_pred, output_dir):
     """
-    Membuat dan menyimpan visualisasi Confusion Matrix sebagai artefak.
+    Menghasilkan plot Confusion Matrix.
     """
     cm = confusion_matrix(y_test, y_pred)
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    plt.title('Confusion Matrix')
+    plt.title('Confusion Matrix - Tuning Model')
     plt.ylabel('Actual Label')
     plt.xlabel('Predicted Label')
     
@@ -101,19 +99,19 @@ def generate_confusion_matrix(y_test, y_pred, output_dir):
 
 def generate_feature_importance(model, feature_names, output_dir):
     """
-    Membuat dan menyimpan visualisasi Feature Importance sebagai artefak.
+    Menghasilkan plot Feature Importance.
     """
     importances = model.feature_importances_
     indices = np.argsort(importances)[::-1]
     
     plt.figure(figsize=(10, 6))
-    plt.title("Feature Importances")
+    plt.title("Feature Importances - Tuning Model")
     plt.bar(range(len(importances)), importances[indices], align="center")
     plt.xticks(range(len(importances)), [feature_names[i] for i in indices], rotation=90)
     plt.tight_layout()
     
-    file_path = os.path.join(output_dir, 'feature_importance.png')
-    plt.savefig(file_path)
+    img_path = os.path.join(output_dir, 'feature_importance.png')
+    plt.savefig(img_path)
     plt.close()
     
     importance_df = pd.DataFrame({
@@ -123,33 +121,46 @@ def generate_feature_importance(model, feature_names, output_dir):
     csv_path = os.path.join(output_dir, 'feature_importance.csv')
     importance_df.to_csv(csv_path, index=False)
     
-    return file_path, csv_path
-
+    return img_path, csv_path
 
 def main():
     os.makedirs(ARTIFACT_DIR, exist_ok=True)
     
-    try:
-        X_train, y_train, X_test, y_test = load_dataset(TRAIN_DATA_PATH, TEST_DATA_PATH)
-    except FileNotFoundError:
-        print("[ERROR] File dataset tidak ditemukan. Pastikan path sudah benar.")
-        return
-
+    # 1. AUTHENTICATION FIX: Mencegah OAuth interaktif di GitHub Actions
     print("[INFO] Menginisialisasi koneksi DagsHub...")
+    token = os.getenv("DAGSHUB_TOKEN")
+    if token:
+        # Jika ada token (di CI/CD), gunakan token tersebut secara otomatis
+        os.environ["DAGSHUB_USER_TOKEN"] = token
+        print("[INFO] Token ditemukan, menggunakan Headless Authentication.")
+    
     dagshub.init(repo_owner=DAGSHUB_REPO_OWNER, repo_name=DAGSHUB_REPO_NAME, mlflow=True)
     
+    # Set Tracking URI secara eksplisit
+    tracking_uri = f"https://dagshub.com/{DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}.mlflow"
+    mlflow.set_tracking_uri(tracking_uri)
+
+    try:
+        X_train, y_train, X_test, y_test = load_dataset(TRAIN_DATA_PATH, TEST_DATA_PATH)
+    except Exception as e:
+        print(f"[ERROR] Gagal memuat data: {e}")
+        return
+
     print("[INFO] Memulai MLflow run...")
     with mlflow.start_run(run_name="RandomForest_Hyperparameter_Tuning"):
         
+        # Latih model dengan tuning
         best_model, best_params = tune_hyperparameters(X_train, y_train)
         
+        # Evaluasi
         metrics, y_pred = evaluate_model(best_model, X_test, y_test)
         
-        print("[INFO] Membuat artefak visualisasi...")
+        # Artefak
         cm_path = generate_confusion_matrix(y_test, y_pred, ARTIFACT_DIR)
         fi_img_path, fi_csv_path = generate_feature_importance(best_model, X_train.columns, ARTIFACT_DIR)
         
-        print("[INFO] Melakukan logging manual ke MLflow...")
+        # MANUAL LOGGING (Syarat Skilled)
+        print("[INFO] Mencatat parameter dan metrik secara manual...")
         mlflow.log_params(best_params)
         mlflow.log_metrics(metrics)
         
@@ -159,11 +170,11 @@ def main():
         
         mlflow.sklearn.log_model(
             sk_model=best_model,
-            name="model",
-            registered_model_name="TelcoChurn_RandomForest"
+            artifact_path="model",
+            registered_model_name="TelcoChurn_RandomForest_Tuning"
         )
         
-        print("[INFO] Eksperimen berhasil dicatat di DagsHub/MLflow.")
+        print("[INFO] Eksperimen tuning berhasil dicatat di DagsHub/MLflow.")
 
 if __name__ == "__main__":
     main()
